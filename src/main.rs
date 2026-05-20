@@ -6,10 +6,11 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::execute;
 use crossterm::event::{Event, KeyCode, KeyEvent};
+use crossterm::execute;
 use crossterm::style::{Color, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
+use crossterm::terminal;
 use yaml_rust::YamlLoader;
 
 #[derive(Debug)]
@@ -309,7 +310,7 @@ fn draw_bar<S: AsRef<str>>(label: S, value: f64, max: f64, color: Color, empty_c
 fn main() {
     let config = Config::load();
     
-    let mut events = crossterm::event::poll(Duration::from_millis(1)).unwrap_or(false);
+    terminal::enable_raw_mode().unwrap();
     
     loop {
         const MAX_GPUS: usize = 8;
@@ -401,7 +402,7 @@ fn main() {
 
         // Check for key press
         if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
-            if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = crossterm::event::read() {
+            if let Ok(Event::Key(KeyEvent { code, .. })) = crossterm::event::read() {
                 if code == KeyCode::Char('q') || code == KeyCode::Esc {
                     break;
                 }
