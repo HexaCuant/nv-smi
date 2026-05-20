@@ -5,11 +5,9 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use crossterm::cursor::{MoveTo};
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::style::{Color, SetForegroundColor};
-use crossterm::terminal::{Clear, ClearType};
 use crossterm::terminal::{enable_raw_mode};
 use yaml_rust::YamlLoader;
 
@@ -259,25 +257,56 @@ fn print_colored<S: AsRef<str>>(color: Color, text: S) {
     print!("");
 }
 
+fn strip_ansi_codes(text: &str) -> String {
+    let mut result = String::new();
+    let mut in_escape = false;
+    
+    for c in text.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        if in_escape {
+            if c == '[' {
+                continue;
+            }
+            if in_escape && (c.is_ascii_digit() || c == ';' || c == 'H' || c == 'm' || c == 'J' || c == 'K') {
+                if c == 'H' || c == 'm' || c == 'J' || c == 'K' {
+                    in_escape = false;
+                }
+                continue;
+            }
+            in_escape = false;
+        }
+        result.push(c);
+    }
+    
+    result
+}
+
 fn get_last_lines(path: &str, n: usize) -> Vec<String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
     
-    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let lines: Vec<String> = content
+        .lines()
+        .map(|l| strip_ansi_codes(l))
+        .collect();
     let start = if lines.len() > n { lines.len() - n } else { 0 };
     lines[start..].to_vec()
 }
 
-fn render_log_window(lines: &[String], y_start: usize, _width: usize, height: usize) {
-    for i in 0..height {
-        let y = y_start + i;
-        execute!(io::stdout(), MoveTo(0, y as u16), Clear(ClearType::CurrentLine)).unwrap();
-        
-        if i < lines.len() {
-            print!("{}", lines[i]);
-        }
+fn render_log_window(lines: &[String], _y_start: usize, _width: usize, height: usize) {
+    // Print actual log lines
+    for line in lines.iter().take(height) {
+        println!("{}", line);
+    }
+    
+    // Clear remaining empty lines
+    for _ in lines.len().min(height)..height {
+        println!();
     }
 }
 
@@ -381,11 +410,10 @@ fn main() {
             println!("══════════════════════════════════════════=");
             
             let log_lines = get_last_lines(log_file, config.log_lines);
-            let log_y_start = (3 + gpus.len() * 10 + 2) as u16;
             
             render_log_window(
                 &log_lines,
-                log_y_start as usize,
+                0,
                 80,
                 config.log_height
             );
