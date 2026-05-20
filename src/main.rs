@@ -5,6 +5,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+use crossterm::cursor::MoveTo;
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::style::{Color, SetForegroundColor};
@@ -298,14 +299,18 @@ fn get_last_lines(path: &str, n: usize) -> Vec<String> {
     lines[start..].to_vec()
 }
 
-fn render_log_window(lines: &[String], _y_start: usize, _width: usize, height: usize) {
+fn render_log_window(lines: &[String], y_start: usize, _width: usize, height: usize) {
     // Print actual log lines
-    for line in lines.iter().take(height) {
+    for (i, line) in lines.iter().enumerate().take(height) {
+        let y = y_start + i;
+        execute!(io::stdout(), MoveTo(0, y as u16)).unwrap();
         println!("{}", line);
     }
     
     // Clear remaining empty lines
-    for _ in lines.len().min(height)..height {
+    for i in lines.len().min(height)..height {
+        let y = y_start + i;
+        execute!(io::stdout(), MoveTo(0, y as u16)).unwrap();
         println!();
     }
 }
@@ -342,23 +347,40 @@ fn main() {
     // Enable raw mode for keyboard input, but continue if it fails
     let _ = enable_raw_mode();
     
+    let mut y = 0;
+    
     loop {
         let output = get_nvidia_smi();
         let gpus = parse_gpus(&output);
 
         print!("\x1b[2J");
         print!("\x1b[H");
+        y = 0;
 
+        execute!(io::stdout(), MoveTo(0, y)).unwrap();
         print_colored(parse_color_str(&config.title), "NV-SMI\n");
+        y += 1;
+        
+        execute!(io::stdout(), MoveTo(0, y)).unwrap();
         println!("══════════════════════════════════════════=");
+        y += 1;
+        
+        execute!(io::stdout(), MoveTo(0, y)).unwrap();
         println!();
+        y += 1;
 
         let bar_empty = parse_color_str(&config.bar_empty);
 
         for gpu in &gpus {
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print_colored(Color::Magenta, &format!("GPU {}\n", gpu.id));
+            y += 1;
+            
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             println!();
+            y += 1;
 
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             draw_bar(
                 "Temp",
                 gpu.temperature,
@@ -367,8 +389,10 @@ fn main() {
                 bar_empty,
             );
             print!(" {}°C\n", gpu.temperature as u32);
+            y += 1;
 
             let power_color = parse_color_str(&config.power);
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             draw_bar(
                 "Power",
                 (gpu.power_usage as f64) / (gpu.power_cap as f64) * 100.0,
@@ -377,8 +401,10 @@ fn main() {
                 bar_empty,
             );
             print!(" {}/{}W\n", gpu.power_usage, gpu.power_cap);
+            y += 1;
 
             let mem_color = parse_color_str(&config.memory);
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             draw_bar(
                 "Memory",
                 (gpu.memory_used as f64) / (gpu.memory_total as f64) * 100.0,
@@ -387,7 +413,9 @@ fn main() {
                 bar_empty,
             );
             print!(" {}/{}MiB\n", gpu.memory_used, gpu.memory_total);
+            y += 1;
 
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             draw_bar(
                 "Util",
                 gpu.gpu_util,
@@ -396,27 +424,41 @@ fn main() {
                 bar_empty,
             );
             print!(" {}%\n", gpu.gpu_util as u32);
+            y += 1;
 
             if gpu.id + 1 < gpus.len() {
+                execute!(io::stdout(), MoveTo(0, y)).unwrap();
                 println!();
+                y += 1;
+                execute!(io::stdout(), MoveTo(0, y)).unwrap();
                 println!("─────────────────────────────────────");
+                y += 1;
             }
         }
 
         // Render log window if configured
         if let Some(ref log_file) = config.log_file {
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             println!();
+            y += 1;
+            
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print_colored(parse_color_str(&config.title), "LOG\n");
+            y += 1;
+            
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
             println!("══════════════════════════════════════════=");
+            y += 1;
             
             let log_lines = get_last_lines(log_file, config.log_lines);
             
             render_log_window(
                 &log_lines,
-                0,
+                y as usize,
                 80,
                 config.log_height
             );
+            y += log_lines.len().min(config.log_height) as u16;
         }
 
         // Check for key press
