@@ -36,6 +36,9 @@ struct Config {
     util_high: String,
     title: String,
     bar_empty: String,
+    log_file: Option<String>,
+    log_lines: usize,
+    log_height: usize,
 }
 
 impl Default for Config {
@@ -52,6 +55,9 @@ impl Default for Config {
             util_high: "Red".to_string(),
             title: "Cyan".to_string(),
             bar_empty: "DarkGrey".to_string(),
+            log_file: None,
+            log_lines: 10,
+            log_height: 10,
         }
     }
 }
@@ -153,6 +159,20 @@ impl Config {
                     .and_then(|d| d["bar_empty"].as_str())
                     .unwrap_or("DarkGrey")
                     .to_string(),
+                log_file: docs
+                    .get(0)
+                    .and_then(|d| d["log_file"].as_str())
+                    .map(|s| s.to_string()),
+                log_lines: docs
+                    .get(0)
+                    .and_then(|d| d["log_lines"].as_i64())
+                    .map(|v| v as usize)
+                    .unwrap_or(10),
+                log_height: docs
+                    .get(0)
+                    .and_then(|d| d["log_height"].as_i64())
+                    .map(|v| v as usize)
+                    .unwrap_or(10),
             }
         } else {
             Config::default()
@@ -235,6 +255,28 @@ fn print_colored<S: AsRef<str>>(color: Color, text: S) {
     execute!(io::stdout(), SetForegroundColor(color)).unwrap();
     print!("{}", text.as_ref());
     print!("");
+}
+
+fn get_last_lines(path: &str, n: usize) -> Vec<String> {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    
+    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let start = if lines.len() > n { lines.len() - n } else { 0 };
+    lines[start..].to_vec()
+}
+
+fn render_log_window(lines: &[String], y_start: usize, width: usize, height: usize) {
+    for i in 0..height {
+        let y = y_start + i;
+        execute!(io::stdout(), MoveTo(0, y as u16), Clear(ClearType::CurrentLine)).unwrap();
+        
+        if i < lines.len() {
+            print!("{}", lines[i]);
+        }
+    }
 }
 
 fn draw_bar<S: AsRef<str>>(label: S, value: f64, max: f64, color: Color, empty_color: Color) {
@@ -336,6 +378,24 @@ fn main() {
                 println!("─────────────────────────────────────");
             }
         }
+
+        // Render log window if configured
+        if let Some(ref log_file) = config.log_file {
+            println!();
+            print_colored(parse_color_str(&config.title), "LOG\n");
+            println!("══════════════════════════════════════════=");
+            
+            let log_lines = get_last_lines(log_file, config.log_lines);
+            let log_y_start = (3 + gpus.len() * 10 + 2) as u16;
+            
+            render_log_window(
+                &log_lines,
+                log_y_start as usize,
+                80,
+                config.log_height
+            );
+        }
+
         thread::sleep(Duration::from_secs(2));
     }
 }
