@@ -5,19 +5,19 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{MoveTo};
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::style::{Color, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
-use crossterm::terminal;
+use crossterm::terminal::{enable_raw_mode};
 use yaml_rust::YamlLoader;
 
 #[derive(Debug)]
 struct GpuInfo {
     id: usize,
     temperature: f64,
-    fan_speed: f64,
+    _fan_speed: f64,
     power_usage: u32,
     power_cap: u32,
     memory_used: u32,
@@ -216,7 +216,7 @@ fn parse_gpus(output: &str) -> Vec<GpuInfo> {
                     gpus.push(GpuInfo {
                         id: gpu_id,
                         temperature: parse_float(tokens[1]),
-                        fan_speed: parse_float(tokens[0]),
+                        _fan_speed: parse_float(tokens[0]),
                         power_usage: parse_u32(tokens[3]),
                         power_cap: parse_u32(tokens[5]),
                         memory_used: parse_u32(tokens[7]),
@@ -270,7 +270,7 @@ fn get_last_lines(path: &str, n: usize) -> Vec<String> {
     lines[start..].to_vec()
 }
 
-fn render_log_window(lines: &[String], y_start: usize, width: usize, height: usize) {
+fn render_log_window(lines: &[String], y_start: usize, _width: usize, height: usize) {
     for i in 0..height {
         let y = y_start + i;
         execute!(io::stdout(), MoveTo(0, y as u16), Clear(ClearType::CurrentLine)).unwrap();
@@ -310,17 +310,12 @@ fn draw_bar<S: AsRef<str>>(label: S, value: f64, max: f64, color: Color, empty_c
 fn main() {
     let config = Config::load();
     
-    terminal::enable_raw_mode().unwrap();
+    // Enable raw mode for keyboard input, but continue if it fails
+    let _ = enable_raw_mode();
     
     loop {
-        const MAX_GPUS: usize = 8;
-        const LINES_PER_GPU: usize = 9;
-        let max_lines = 3 + MAX_GPUS * LINES_PER_GPU;
-
         let output = get_nvidia_smi();
         let gpus = parse_gpus(&output);
-        let actual_lines =
-            2 + gpus.len() * (LINES_PER_GPU - 1) + if gpus.len() > 0 { 3 } else { 0 };
 
         print!("\x1b[2J");
         print!("\x1b[H");
@@ -330,10 +325,6 @@ fn main() {
         println!();
 
         let bar_empty = parse_color_str(&config.bar_empty);
-
-        // Calculate total lines: 2 (header) + per GPU
-        let lines_per_gpu = 10; // GPU line, empty, temp+bar, power+bar, mem+bar, util+bar, 2 separator lines (except last)
-        let total_lines = 3 + gpus.len() * lines_per_gpu;
 
         for gpu in &gpus {
             print_colored(Color::Magenta, &format!("GPU {}\n", gpu.id));
