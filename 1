@@ -1,0 +1,30 @@
+   Compiling nv-smi v0.1.0 (/home/mburgos/nv-smi)
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `terminal`
+   --> src/main.rs:273:32
+    |
+273 |         execute!(io::stdout(), terminal::Clear(ClearType::All)).unwrap();
+    |                                ^^^^^^^^ use of unresolved module or unlinked crate `terminal`
+    |
+    = help: if you wanted to use a crate named `terminal`, use `cargo add terminal` to add it to your `Cargo.toml`
+help: consider importing this module
+    |
+  1 + use crossterm::terminal;
+    |
+
+warning: unused imports: `Hide` and `MoveTo`
+ --> src/main.rs:8:25
+  |
+8 | use crossterm::cursor::{Hide, MoveTo, Show};
+  |                         ^^^^  ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Clear`
+  --> src/main.rs:11:27
+   |
+11 | use crossterm::terminal::{Clear, ClearType};
+   |                           ^^^^^
+
+For more information about this error, try `rustc --explain E0433`.
+warning: `nv-smi` (bin "nv-smi") generated 2 warnings
+error: could not compile `nv-smi` (bin "nv-smi") due to 1 previous error; 2 warnings emitted

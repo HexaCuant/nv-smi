@@ -1,0 +1,11 @@
+[package]
+name = "nv-smi"
+version = "0.1.0"
+edition = "2021"
+authors = ["You"]
+description = "Enhanced nvidia-smi with beautiful colored output and ANSI progress bars"
+
+[dependencies]
+crossterm = "0.27"
+yaml-rust = "0.4"
+chrono = "0.4"
