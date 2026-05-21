@@ -9,7 +9,7 @@ use crossterm::cursor::MoveTo;
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::style::{Color, SetForegroundColor};
-use crossterm::terminal::{enable_raw_mode};
+use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
 use yaml_rust::YamlLoader;
 
 #[derive(Debug)]
@@ -470,6 +470,13 @@ fn main() {
             }
         }
 
-        thread::sleep(Duration::from_secs(2));
+          thread::sleep(Duration::from_secs(2));
     }
+    
+    // Restore terminal to normal mode
+    let _ = disable_raw_mode();
+    
+    // Clear screen one last time
+    print!("\x1b[2J");
+    print!("\x1b[H");
 }
