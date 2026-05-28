@@ -568,7 +568,7 @@ fn render_inference_bars(stats: &InferenceStats) -> Vec<String> {
             format_bar("Prompt t/s", stats.tokens_per_second, 1000.0, Color::Cyan, bar_empty),
             stats.tokens_per_second as u32),
         format!("{} {}/s",
-            format_bar("Gen t/s", stats.gen_speed_tps, 50.0, Color::Green, bar_empty),
+            format_bar("Gen t/s", stats.gen_speed_tps, 100.0, Color::Green, bar_empty),
             stats.gen_speed_tps as u32),
         format!("{} {}",
             format_bar("Decoded", stats.n_decoded as f64, 1000.0, Color::Magenta, bar_empty),
