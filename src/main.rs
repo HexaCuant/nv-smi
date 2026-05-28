@@ -371,7 +371,7 @@ fn format_bar(label: &str, value: f64, max: f64, color: Color, empty_color: Colo
     let width = 25;
     let filled = ((percent / 100.0) * width as f64).round() as usize;
 
-    let mut s = format!("{:10}", label);
+   let mut s = format!("{:10}", label);
     for i in 0..width {
         if i < filled {
             s += &format!("{}", SetForegroundColor(color));
@@ -384,6 +384,8 @@ fn format_bar(label: &str, value: f64, max: f64, color: Color, empty_color: Colo
             s.push('░');
         }
     }
+    // Reset color so subsequent text (numbers, etc.) isn't colored DarkGrey.
+    s += "\x1b[0m";
     s
 }
 
@@ -575,7 +577,7 @@ fn render_inference_bars(stats: &InferenceStats) -> Vec<String> {
             format_bar("Latency", stats.latency_ms_tok, 5.0, Color::Yellow, bar_empty),
             stats.latency_ms_tok),
         format!("{} {:.2}s",
-            format_bar("Time", stats.time_seconds, 60.0, Color::Yellow, bar_empty),
+            format_bar("Time", stats.time_seconds, 300.0, Color::Yellow, bar_empty),
             stats.time_seconds),
     ]
 }
@@ -610,6 +612,12 @@ fn format_colored(color: Color, text: &str) -> String {
     format!("\x1b[{}m{}\x1b[0m", c, text)
 }
 
+fn println_line(text: &str) {
+    print!("{}", text);
+    // Clear rest of line to avoid leftover characters from longer previous content.
+    print!("\x1b[K\n");
+}
+
 fn main() {
     let config = Config::load();
 
@@ -619,6 +627,8 @@ fn main() {
     let mut prev_llama: Option<String> = None;
     let mut prev_log_lines: Vec<String> = Vec::new();
     let mut prev_height: u16 = 0;
+    let mut persist_gen_speed: f64 = 0.0;
+    let mut persist_n_decoded: u32 = 0;
 
     loop {
         let output = get_nvidia_smi();
@@ -672,14 +682,14 @@ fn main() {
         // Title
         execute!(io::stdout(), MoveTo(0, y)).unwrap();
         print!("{}", format_colored(parse_color_str(&config.title), "NV-SMI"));
-        println!();
+        println_line("");
         y += 1;
 
         if let Some(ref info) = llama_info {
             let model_name = info.model.rsplit('/').next().unwrap_or("unknown");
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_colored(Color::Yellow, &format!("Model: {}", model_name)));
-            println!();
+            println_line("");
             y += 1;
 
             if !info.params.is_empty() {
@@ -690,27 +700,27 @@ fn main() {
                     for (key, val) in chunk {
                         print!("{:width$} ", format!("{}={}", key, val), width = col_w);
                     }
-                    println!();
+                    println_line("");
                     y += 1;
                 }
             }
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            println!("─────────────────────────────────────");
+            println_line("─────────────────────────────────────");
             y += 1;
         } else {
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            print!("{}", format_colored(Color::DarkGrey, "(no llama-server running)"));
-            println!();
+            print!("{}", format_colored(Color::White, "(no llama-server running)"));
+            println_line("");
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            println!("─────────────────────────────────────");
+            println_line("─────────────────────────────────────");
             y += 1;
         }
 
         execute!(io::stdout(), MoveTo(0, y)).unwrap();
-        println!();
+        println_line("");
         y += 1;
 
         let bar_empty = parse_color_str(&config.bar_empty);
@@ -718,58 +728,58 @@ fn main() {
         for gpu in &gpus {
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_colored(Color::Magenta, &format!("GPU {}", gpu.id)));
-            println!();
+            println_line("");
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            println!();
+            println_line("");
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_bar("Temp", gpu.temperature, 100.0, get_temp_color(gpu.temperature, &config), bar_empty));
-            println!(" {}°C", gpu.temperature as u32);
+            println!(" {}°C\x1b[K", gpu.temperature as u32);
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_bar("Fan", gpu.fan_speed, 100.0, Color::White, bar_empty));
-            println!(" {:.0}%", gpu.fan_speed);
+            println!(" {:.0}%\x1b[K", gpu.fan_speed);
             y += 1;
 
             let power_color = parse_color_str(&config.power);
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_bar("Power", (gpu.power_usage as f64) / (gpu.power_cap as f64) * 100.0, 100.0, power_color, bar_empty));
-            println!(" {}/{}W", gpu.power_usage, gpu.power_cap);
+            println!(" {}/{}W\x1b[K", gpu.power_usage, gpu.power_cap);
             y += 1;
 
             let power_left = if gpu.power_cap > gpu.power_usage { gpu.power_cap - gpu.power_usage } else { 0 };
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_bar("Pwr Left", power_left as f64, gpu.power_cap as f64, power_color, bar_empty));
-            println!(" {}W", power_left);
+            println!(" {}W\x1b[K", power_left);
             y += 1;
 
             let mem_color = parse_color_str(&config.memory);
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_bar("Memory", (gpu.memory_used as f64) / (gpu.memory_total as f64) * 100.0, 100.0, mem_color, bar_empty));
-            println!(" {}/{}MiB", gpu.memory_used, gpu.memory_total);
+            println!(" {}/{}MiB\x1b[K", gpu.memory_used, gpu.memory_total);
             y += 1;
 
             let mem_free = if gpu.memory_total > gpu.memory_used { gpu.memory_total - gpu.memory_used } else { 0 };
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_bar("Mem Free", mem_free as f64, gpu.memory_total as f64, mem_color, bar_empty));
-            println!(" {}MiB", mem_free);
+            println!(" {}MiB\x1b[K", mem_free);
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             print!("{}", format_bar("Util", gpu.gpu_util, 100.0, get_util_color(gpu.gpu_util, &config), bar_empty));
-            println!(" {}%", gpu.gpu_util as u32);
+            println!(" {}%\x1b[K", gpu.gpu_util as u32);
             y += 1;
 
             if gpu.id + 1 < gpus.len() {
                 execute!(io::stdout(), MoveTo(0, y)).unwrap();
-                println!();
+                println_line("");
                 y += 1;
                 execute!(io::stdout(), MoveTo(0, y)).unwrap();
-                println!("─────────────────────────────────────");
+                println_line("─────────────────────────────────────");
                 y += 1;
             }
         }
@@ -777,16 +787,16 @@ fn main() {
         // Render log window if configured
         if let Some(ref log_file) = config.log_file {
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            println!();
+            println_line("");
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            print!("{}", format_colored(parse_color_str(&config.title), "LOG"));
-            println!();
+           print!("{}", format_colored(parse_color_str(&config.title), "LOG"));
+            println_line("");
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            println!("═══════════════════════════════════════════");
+            println_line("═══════════════════════════════════════════");
             y += 1;
 
             let log_lines_data = get_last_lines(log_file, config.log_lines);
@@ -822,25 +832,28 @@ fn main() {
                 gen_speed_tps: 0.0,
                 latency_ms_tok: 0.0,
             });
-            stats_to_render.n_decoded = last_n_decoded;
-            stats_to_render.gen_speed_tps = last_gen_speed;
+           // Persist values across renders so bars don't reset to 0.
+            if last_n_decoded > 0 { persist_n_decoded = last_n_decoded; }
+            if last_gen_speed > 0.0 { persist_gen_speed = last_gen_speed; }
+            stats_to_render.n_decoded = persist_n_decoded;
+            stats_to_render.gen_speed_tps = persist_gen_speed;
             stats_to_render.latency_ms_tok = last_latency;
 
             let bar_lines = render_inference_bars(&stats_to_render);
             for (i, line) in bar_lines.iter().enumerate() {
                execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
-                println!("{}", line);
+ println!("{}\x1b[K", line);
             }
             y += bar_lines.len() as u16;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-            println!();
+           println_line("");
             y += 1;
 
             let log_display = render_log_window(&log_lines_data, config.log_height);
             for (i, line) in log_display.iter().enumerate() {
                 execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
-                println!("{}", line);
+                println!("{}\x1b[K", line);
             }
             y += log_display.len() as u16;
         }
@@ -848,7 +861,7 @@ fn main() {
         // Clear leftover lines from a taller previous frame.
         for cy in y..prev_height {
             execute!(io::stdout(), MoveTo(0, cy)).unwrap();
-            println!("{:120}", " ");
+            print!("{:120}\x1b[K", " ");
         }
 
         prev_height = y;
