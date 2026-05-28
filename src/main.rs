@@ -26,12 +26,9 @@ struct GpuInfo {
 
 #[derive(Debug)]
 struct InferenceStats {
-    n_tokens: u32,
     progress: f64,
     time_seconds: f64,
     tokens_per_second: f64,
-    task_id: u32,
-    slot_id: u32,
     n_decoded: u32,
     gen_speed_tps: f64,
     latency_ms_tok: f64,
@@ -435,46 +432,95 @@ fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
         return None;
     }
 
-    let n_tokens = extract_number_after(line, "n_tokens");
+    // Extract what's available from this line (not all fields present in every line).
     let progress = extract_float_after(line, "progress");
-    let time = extract_float_after(line, "t =");
-    let tps = extract_tokens_per_second(line);
-    let task_id = extract_number_after(line, "task");
-    let slot_id = extract_number_after(line, "id");
+    let time_ms = extract_float_after(line, "ms /");
 
-    if n_tokens > 0 && progress > 0.0 && time > 0.0 && tps > 0.0 {
-        Some(InferenceStats {
-            n_tokens,
-            progress,
-            time_seconds: time,
-            tokens_per_second: tps,
-            task_id,
-            slot_id,
-            n_decoded: 0,
-            gen_speed_tps: 0.0,
-            latency_ms_tok: 0.0,
-        })
-    } else {
-        None
+    // Try to get t/s from the "(X.XX tokens per second)" part.
+    let mut tps: f64 = 0.0;
+    if let Some(pos) = line.rfind("tokens per second") {
+        let start = line.rfind('/').unwrap_or(pos - 20);
+        let section = &line[start + 1..pos];
+        let nums: String = section.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+        tps = nums.parse().unwrap_or(0.0);
     }
+
+    // Try to get latency from "(X.XX ms per token)".
+    let mut lat_tok: f64 = 0.0;
+    if let Some(pos) = line.find("ms per token") {
+        let start = line.rfind('(').unwrap_or(pos - 15);
+        let section = &line[start + 1..pos];
+        let nums: String = section.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+        lat_tok = nums.parse().unwrap_or(0.0);
+    }
+
+    // Try to get gen speed from "(X.XX tokens per second)" — this is eval time line.
+    let mut gen_speed: f64 = 0.0;
+    if line.contains("eval time") && !line.contains("prompt eval time") {
+        if let Some(pos) = line.rfind("tokens per second") {
+            // Find the last '(' before this position for "(X.XX tokens per second)".
+            let mut last_start: usize = 0;
+            for (i, ch) in line[..pos].char_indices() {
+                if ch == '(' {
+                    last_start = i;
+                }
+            }
+            if last_start > 0 && last_start < pos {
+                let section = &line[last_start + 1..pos];
+                let nums: String = section.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+                gen_speed = nums.parse().unwrap_or(0.0);
+            }
+        }
+    }
+
+    // Total time from "total time = X ms".
+    let mut total_time: f64 = 0.0;
+    if line.contains("total time") {
+        total_time = extract_float_after(line, "= ") / 1000.0; // ms -> s
+    }
+
+    Some(InferenceStats {
+        progress,
+        time_seconds: if total_time > 0.0 { total_time } else { time_ms },
+        tokens_per_second: tps,
+        n_decoded: if line.contains("stop processing") || line.contains("n_decoded") {
+            extract_number_after(line, "n_tokens")
+        } else { 0 },
+        gen_speed_tps: if gen_speed > 0.0 { gen_speed } else { tps },
+        latency_ms_tok: lat_tok,
+    })
 }
 
 fn parse_generation_stats(line: &str) -> Option<(u32, f64)> {
-    if !line.contains("n_decoded") {
-        return None;
+    // Also check for "stop processing" lines with final token count.
+    if line.contains("n_decoded") || (line.contains("stop processing") && line.contains("n_tokens")) {
+        let n_decoded = extract_number_after(line, "n_tokens");
+        let gen_speed = extract_float_after(line, "tg =");
+        if n_decoded > 0 || gen_speed > 0.0 {
+            return Some((n_decoded, gen_speed));
+        }
     }
 
-    let n_decoded = extract_number_after(line, "n_decoded");
-    let gen_speed = extract_float_after(line, "tg =");
-
-    if n_decoded > 0 && gen_speed > 0.0 {
-        Some((n_decoded, gen_speed))
-    } else {
-        None
+    // Legacy: look for n_decoded in eval-time lines.
+    if line.contains("eval time") && !line.contains("prompt eval time") {
+        let n_decoded = extract_number_after(line, "tokens");
+        let gen_speed = extract_float_after(line, "tokens per second)");
+        if n_decoded > 0 && gen_speed > 0.0 {
+            return Some((n_decoded, gen_speed));
+        }
     }
+
+    None
 }
 
 fn parse_latency(line: &str) -> Option<f64> {
+    // Also extract latency from "(X.XX ms per token)" in eval/prompt lines.
+    if line.contains("ms per token") && !line.contains("verify ubatch") {
+        let lat = extract_float_after(line, "ms per token");
+        if lat > 0.0 { return Some(lat); }
+    }
+
+    // Legacy: verify ubatch latency.
     if !line.contains("verify ubatch") {
         return None;
     }
@@ -542,17 +588,6 @@ fn extract_float_after(line: &str, marker: &str) -> f64 {
         } else {
             0.0
         }
-    } else {
-        0.0
-    }
-}
-
-fn extract_tokens_per_second(line: &str) -> f64 {
-    if let Some(pos) = line.find("tokens per second") {
-        let start = line.rfind('/').unwrap_or(pos - 20);
-        let section = &line[start + 1..pos];
-        let nums: String = section.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
-        nums.parse().unwrap_or(0.0)
     } else {
         0.0
     }
@@ -627,6 +662,7 @@ fn main() {
     let mut prev_llama: Option<String> = None;
     let mut prev_log_lines: Vec<String> = Vec::new();
     let mut prev_height: u16 = 0;
+   let mut persist_progress: f64 = 0.0;
     let mut persist_gen_speed: f64 = 0.0;
     let mut persist_n_decoded: u32 = 0;
 
@@ -801,14 +837,16 @@ fn main() {
 
             let log_lines_data = get_last_lines(log_file, config.log_lines);
 
-            // Try to parse inference stats from the most recent lines
+           // Try to parse inference stats from the most recent lines
             let mut last_stats: Option<InferenceStats> = None;
+            let mut found_print_timing = false;
             let mut last_n_decoded: u32 = 0;
             let mut last_gen_speed: f64 = 0.0;
             let mut last_latency: f64 = 0.0;
 
             for line in &log_lines_data {
                 if let Some(stats) = parse_inference_stats(line) {
+                    found_print_timing = true;
                     last_stats = Some(stats);
                 }
                 if let Some((nd, gs)) = parse_generation_stats(line) {
@@ -822,21 +860,20 @@ fn main() {
 
             // Always render inference bars (with zeros if no data yet)
             let mut stats_to_render = last_stats.unwrap_or(InferenceStats {
-                n_tokens: 0,
                 progress: 0.0,
                 time_seconds: 0.0,
                 tokens_per_second: 0.0,
-                task_id: 0,
-                slot_id: 0,
                 n_decoded: 0,
                 gen_speed_tps: 0.0,
                 latency_ms_tok: 0.0,
             });
            // Persist values across renders so bars don't reset to 0.
+            if found_print_timing { persist_progress = stats_to_render.progress; }
             if last_n_decoded > 0 { persist_n_decoded = last_n_decoded; }
             if last_gen_speed > 0.0 { persist_gen_speed = last_gen_speed; }
             stats_to_render.n_decoded = persist_n_decoded;
             stats_to_render.gen_speed_tps = persist_gen_speed;
+            stats_to_render.progress = persist_progress;
             stats_to_render.latency_ms_tok = last_latency;
 
             let bar_lines = render_inference_bars(&stats_to_render);
