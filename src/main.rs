@@ -465,45 +465,6 @@ fn get_slot_id(line: &str) -> Option<usize> {
     num_str.parse::<usize>().ok()
 }
 
-#[derive(Debug)]
-struct SlotLog {
-    slot_id: usize,
-    lines: Vec<String>,
-}
-
-fn get_slot_logs(all_lines: &[String], max_per_slot: usize) -> Vec<SlotLog> {
-    let mut slot_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
-    let mut slot_order: Vec<usize> = Vec::new();
-
-    for line in all_lines {
-        if let Some(slot_id) = get_slot_id(line) {
-            if !slot_map.contains_key(&slot_id) {
-                slot_map.insert(slot_id, Vec::new());
-                slot_order.push(slot_id);
-            }
-            slot_map.get_mut(&slot_id).unwrap().push(line.clone());
-        }
-    }
-
-    slot_order.sort();
-
-    let mut result = Vec::new();
-    for slot_id in slot_order {
-        if let Some(lines) = slot_map.get(&slot_id) {
-            let start = if lines.len() > max_per_slot {
-                lines.len() - max_per_slot
-            } else {
-                0
-            };
-            result.push(SlotLog {
-                slot_id,
-                lines: lines[start..].to_vec(),
-            });
-        }
-    }
-    result
-}
-
 fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
     if !line.contains("print_timing") {
         return None;
@@ -849,6 +810,7 @@ fn main() {
         y += 1;
 
         let bar_empty = parse_color_str(&config.bar_empty);
+  
 
         for gpu in &gpus {
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
@@ -909,14 +871,14 @@ fn main() {
             }
         }
 
-        // Render log window if configured
+       // Render log window if configured
         if let Some(ref log_file) = config.log_file {
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
             println_line("");
             y += 1;
 
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
-           print!("{}", format_colored(parse_color_str(&config.title), "LOG"));
+            print!("{}", format_colored(parse_color_str(&config.title), "LOG"));
             println_line("");
             y += 1;
 
@@ -926,101 +888,145 @@ fn main() {
 
             let log_lines_data = get_last_lines(log_file, config.log_lines * 10);
 
-           // Try to parse inference stats from the most recent lines
-            let mut last_stats: Option<InferenceStats> = None;
-            let mut found_print_timing = false;
-            let mut last_n_decoded: u32 = 0;
-            let mut last_gen_speed: f64 = 0.0;
-            let mut last_latency: f64 = 0.0;
-            let mut max_decoded_from_config: u32 = 0;
+            let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
+            let mut slot_order: Vec<usize> = Vec::new();
+            let mut all_non_slot_lines: Vec<String> = Vec::new();
 
             for line in &log_lines_data {
-                if let Some(stats) = parse_inference_stats(line) {
-                    found_print_timing = true;
-                    last_stats = Some(stats);
-                }
-                if let Some((nd, gs)) = parse_generation_stats(line) {
-                    last_n_decoded = nd;
-                    last_gen_speed = gs;
-                }
-                if let Some(lat) = parse_latency(line) {
-                    last_latency = lat;
+                if let Some(slot_id) = get_slot_id(line) {
+                    if !slot_map.contains_key(&slot_id) {
+                        slot_map.insert(slot_id, Vec::new());
+                        slot_order.push(slot_id);
+                    }
+                    slot_map.get_mut(&slot_id).unwrap().push(line.as_str());
+                } else {
+                    all_non_slot_lines.push(line.clone());
                 }
             }
 
-            // Always render inference bars (with zeros if no data yet)
+            let mut max_decoded_from_config: u32 = 0;
             if let Some(ref info) = llama_info {
                 if info.context_len > 0 && info.n_parallel > 0 {
                     max_decoded_from_config = info.context_len / info.n_parallel;
                 }
             }
 
-            let mut stats_to_render = last_stats.unwrap_or(InferenceStats {
-                progress: 0.0,
-                time_seconds: 0.0,
-                tokens_per_second: 0.0,
-                n_decoded: 0,
-                gen_speed_tps: 0.0,
-                latency_ms_tok: 0.0,
-                draft_acceptance: 0.0,
-                n_decoded_max: 0,
-            });
-           // Persist values across renders so bars don't reset to 0.
-            if found_print_timing { persist_progress = stats_to_render.progress; }
-            if last_n_decoded > 0 { persist_n_decoded = last_n_decoded; }
-            if last_gen_speed > 0.0 { persist_gen_speed = last_gen_speed; }
-            if stats_to_render.draft_acceptance > 0.0 { persist_draft_acceptance = stats_to_render.draft_acceptance; }
-            stats_to_render.n_decoded = persist_n_decoded;
-            stats_to_render.gen_speed_tps = persist_gen_speed;
-            stats_to_render.progress = persist_progress;
-            stats_to_render.latency_ms_tok = last_latency;
-            stats_to_render.draft_acceptance = persist_draft_acceptance;
-            stats_to_render.n_decoded_max = max_decoded_from_config;
+            let mut all_slot_stats: Vec<InferenceStats> = Vec::new();
 
-            let bar_lines = render_inference_bars(&stats_to_render);
-            for (i, line) in bar_lines.iter().enumerate() {
-               execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
- println!("{}\x1b[K", line);
-            }
-            y += bar_lines.len() as u16;
+            for slot_id in &slot_order {
+                let lines: Vec<&str> = slot_map.get(slot_id).unwrap().clone();
+                let mut s: Option<InferenceStats> = None;
+                let mut n_decoded: u32 = 0;
+                let mut gen_speed: f64 = 0.0;
+                let mut latency: f64 = 0.0;
 
-            execute!(io::stdout(), MoveTo(0, y)).unwrap();
-           println_line("");
-            y += 1;
-
-            let slot_logs = get_slot_logs(&log_lines_data, config.log_lines);
-            if !slot_logs.is_empty() {
-                let log_height = config.log_height.min(8);
-                for slot_log in &slot_logs {
-                    execute!(io::stdout(), MoveTo(0, y)).unwrap();
-                    print!("{}", format_colored(Color::Cyan, &format!("SLOT {} ({} lines)", slot_log.slot_id, slot_log.lines.len())));
-                    println_line("");
-                    y += 1;
-
-                    let max_w = 60usize;
-                    let border = "═".repeat(max_w);
-                    execute!(io::stdout(), MoveTo(0, y)).unwrap();
-                    println_line(&border);
-                    y += 1;
-
-                    let display = &slot_log.lines[slot_log.lines.len().saturating_sub(log_height)..];
-                    for line in display {
-                        execute!(io::stdout(), MoveTo(0, y)).unwrap();
-                        println!("{}\x1b[K", line);
-                        y += 1;
+                for line in &lines {
+                    if let Some(stats) = parse_inference_stats(line) {
+                        s = Some(stats);
                     }
-                    execute!(io::stdout(), MoveTo(0, y)).unwrap();
-                    println_line("");
-                    y += 1;
+                    if let Some((nd, gs)) = parse_generation_stats(line) {
+                        n_decoded = nd;
+                        gen_speed = gs;
+                    }
+                    if let Some(lat) = parse_latency(line) {
+                        latency = lat;
+                    }
                 }
-            } else {
-                let log_display = render_log_window(&log_lines_data, config.log_height);
-                for (i, line) in log_display.iter().enumerate() {
-                    execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
+
+                let mut stats_to_render = s.unwrap_or(InferenceStats {
+                    progress: 0.0,
+                    time_seconds: 0.0,
+                    tokens_per_second: 0.0,
+                    n_decoded: 0,
+                    gen_speed_tps: 0.0,
+                    latency_ms_tok: 0.0,
+                    draft_acceptance: 0.0,
+                    n_decoded_max: 0,
+                });
+                stats_to_render.n_decoded = n_decoded;
+                stats_to_render.gen_speed_tps = gen_speed;
+                stats_to_render.latency_ms_tok = latency;
+                stats_to_render.n_decoded_max = max_decoded_from_config;
+                all_slot_stats.push(stats_to_render);
+            }
+
+            let mut bar_y = y + 1;
+            let mut slot_idx = 0;
+
+            for slot_id in &slot_order {
+                let slot_stats = &all_slot_stats[slot_idx];
+                execute!(io::stdout(), MoveTo(0, bar_y)).unwrap();
+                print!("{}", format_colored(Color::Yellow, &format!("SLOT {} BARS", slot_id)));
+                println_line("");
+                bar_y += 1;
+
+                let bar_lines = render_inference_bars(slot_stats);
+                for (i, line) in bar_lines.iter().enumerate() {
+                    execute!(io::stdout(), MoveTo(0, bar_y + i as u16)).unwrap();
                     println!("{}\x1b[K", line);
                 }
-                y += log_display.len() as u16;
+                bar_y += bar_lines.len() as u16;
+
+                execute!(io::stdout(), MoveTo(0, bar_y)).unwrap();
+                println_line("");
+                bar_y += 1;
+                slot_idx += 1;
             }
+
+            if all_slot_stats.is_empty() {
+                let mut stats_to_render = InferenceStats {
+                    progress: persist_progress,
+                    time_seconds: 0.0,
+                    tokens_per_second: 0.0,
+                    n_decoded: persist_n_decoded,
+                    gen_speed_tps: persist_gen_speed,
+                    latency_ms_tok: 0.0,
+                    draft_acceptance: persist_draft_acceptance,
+                    n_decoded_max: max_decoded_from_config,
+                };
+
+                let bar_lines = render_inference_bars(&stats_to_render);
+                for (i, line) in bar_lines.iter().enumerate() {
+                    execute!(io::stdout(), MoveTo(0, bar_y + i as u16)).unwrap();
+                    println!("{}\x1b[K", line);
+                }
+                bar_y += bar_lines.len() as u16;
+            }
+
+            y = bar_y;
+
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
+            println_line("");
+            y += 1;
+
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
+            print!("{}", format_colored(parse_color_str(&config.title), "RAW LOG"));
+            println_line("");
+            y += 1;
+
+            execute!(io::stdout(), MoveTo(0, y)).unwrap();
+            println_line("──────────────────────────────────────────");
+            y += 1;
+
+             let all_log_lines: Vec<String> = {
+                let mut result = Vec::new();
+                for slot_id in &slot_order {
+                    for line in slot_map.get(slot_id).unwrap() {
+                        result.push(line.to_string());
+                    }
+                }
+                for line in &all_non_slot_lines {
+                    result.push(line.clone());
+                }
+                result
+            };
+
+            let log_display = render_log_window(&all_log_lines, config.log_height);
+            for (i, line) in log_display.iter().enumerate() {
+                execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
+                println!("{}\x1b[K", line);
+            }
+            y += log_display.len() as u16;
         }
 
         // Clear leftover lines from a taller previous frame.
