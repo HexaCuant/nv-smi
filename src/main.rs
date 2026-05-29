@@ -1074,7 +1074,7 @@ fn main() {
             let mut bar_y = y + 1;
 
             for (slot_id, slot_stats) in all_slot_stats.iter().enumerate() {
-                let is_idle = all_idle || (slot_stats.n_decoded == 0 && slot_stats.gen_speed_tps == 0.0);
+                let is_idle = all_idle;
                 execute!(io::stdout(), MoveTo(0, bar_y)).unwrap();
                 if is_idle {
                     print!("{}", format_colored(Color::Grey, &format!("SLOT {} BARS  —  IDLE", slot_id)));
