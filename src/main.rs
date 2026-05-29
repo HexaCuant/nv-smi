@@ -451,48 +451,31 @@ fn get_last_lines(path: &str, n: usize) -> Vec<String> {
     lines[start..].to_vec()
 }
 
-fn read_new_log_lines(path: &str, offset: &mut u64, last_line_count: &mut usize) -> Vec<String> {
-    let metadata = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return Vec::new(),
-    };
-    let file_size = metadata.len();
-    
-    if file_size < *offset {
-        *offset = 0;
-        *last_line_count = 0;
-        return Vec::new();
-    }
-    
-    if file_size == *offset {
-        return Vec::new();
-    }
-    
+fn read_new_log_lines(path: &str, last_line_count: &mut usize) -> Vec<String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
     
-    let start_byte = if *offset > content.len() as u64 { 0 } else { *offset as usize };
-    if start_byte >= content.len() {
-        return Vec::new();
-    }
-    
-    let new_content = &content[start_byte..];
-    let lines: Vec<String> = new_content
+    let all_lines: Vec<String> = content
         .lines()
         .map(|l| strip_ansi_codes(l))
         .collect();
     
-    let new_line_count = lines.len();
-    *last_line_count = *last_line_count + new_line_count;
+    let total = all_lines.len();
     
-    let total_chars: usize = content.lines()
-        .map(|l| l.len() + 1)
-        .sum();
-    *offset = (total_chars as u64).min(content.len() as u64);
+    if total < *last_line_count {
+        *last_line_count = 0;
+    }
     
-    lines
+    let new_count = total - *last_line_count;
+    
+    if new_count == 0 {
+        return Vec::new();
+    }
+    
+    *last_line_count = total;
+    all_lines.iter().skip(*last_line_count - new_count).cloned().collect()
 }
 
 fn get_slot_id(line: &str) -> Option<usize> {
@@ -796,15 +779,11 @@ fn main() {
     let mut persist_n_decoded: u32 = 0;
     let mut persist_draft_acceptance: f64 = 0.0;
     let mut prev_n_parallel: usize = 0;
-    let mut log_byte_offset: u64 = 0;
     let mut log_line_count: usize = 0;
 
     if let Some(ref log_file) = config.log_file {
-        if let Ok(metadata) = fs::metadata(log_file) {
-            log_byte_offset = metadata.len();
-            if let Ok(content) = fs::read_to_string(log_file) {
-                log_line_count = content.lines().count();
-            }
+        if let Ok(content) = fs::read_to_string(log_file) {
+            log_line_count = content.lines().count();
         }
     }
 
@@ -817,6 +796,7 @@ fn main() {
     loop {
         let output = get_nvidia_smi();
         let gpus = parse_gpus(&output);
+        let mut all_idle = false;
 
         // Only redraw if something actually changed
         let llama_info = get_llama_server_info();
@@ -983,12 +963,10 @@ fn main() {
             println_line("═══════════════════════════════════════════");
             y += 1;
 
-           let new_log_lines = read_new_log_lines(log_file, &mut log_byte_offset, &mut log_line_count);
+           let new_log_lines = read_new_log_lines(log_file, &mut log_line_count);
             let log_lines_data = get_last_lines(log_file, config.log_lines * 10);
 
            let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
-
-            let mut all_idle = false;
             for line in &new_log_lines {
                 if line.contains("all slots are idle") {
                     all_idle = true;
@@ -999,11 +977,16 @@ fn main() {
             }
             
             if all_idle {
+                slot_map.clear();
                 slot_n_decoded.clear();
                 slot_gen_speed.clear();
                 slot_draft.clear();
                 slot_progress.clear();
                 slot_ctx_used.clear();
+                persist_progress = 0.0;
+                persist_gen_speed = 0.0;
+                persist_n_decoded = 0;
+                persist_draft_acceptance = 0.0;
             }
 
                    let mut max_decoded_from_config: u32 = 0;
