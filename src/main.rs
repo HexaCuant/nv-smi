@@ -988,10 +988,22 @@ fn main() {
 
            let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
 
+            let mut all_idle = false;
             for line in &new_log_lines {
+                if line.contains("all slots are idle") {
+                    all_idle = true;
+                }
                 if let Some(slot_id) = get_slot_id(line) {
                     slot_map.entry(slot_id).or_insert_with(Vec::new).push(line.as_str());
                 }
+            }
+            
+            if all_idle {
+                slot_n_decoded.clear();
+                slot_gen_speed.clear();
+                slot_draft.clear();
+                slot_progress.clear();
+                slot_ctx_used.clear();
             }
 
                    let mut max_decoded_from_config: u32 = 0;
@@ -1079,7 +1091,7 @@ fn main() {
             let mut bar_y = y + 1;
 
             for (slot_id, slot_stats) in all_slot_stats.iter().enumerate() {
-                let is_idle = slot_stats.n_decoded == 0 && slot_stats.gen_speed_tps == 0.0;
+                let is_idle = all_idle || (slot_stats.n_decoded == 0 && slot_stats.gen_speed_tps == 0.0);
                 execute!(io::stdout(), MoveTo(0, bar_y)).unwrap();
                 if is_idle {
                     print!("{}", format_colored(Color::Grey, &format!("SLOT {} BARS  —  IDLE", slot_id)));
