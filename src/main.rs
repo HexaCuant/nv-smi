@@ -9,7 +9,7 @@ use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::style::{Color, SetForegroundColor};
-use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
 use yaml_rust::YamlLoader;
 
 #[derive(Debug, Clone)]
@@ -449,6 +449,17 @@ fn get_last_lines(path: &str, n: usize) -> Vec<String> {
         .collect();
     let start = if lines.len() > n { lines.len() - n } else { 0 };
     lines[start..].to_vec()
+}
+
+fn get_all_log_lines(path: &str) -> Vec<String> {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    content
+        .lines()
+        .map(|l| strip_ansi_codes(l))
+        .collect()
 }
 
 fn get_slot_id(line: &str) -> Option<usize> {
@@ -922,11 +933,11 @@ fn main() {
             println_line("═══════════════════════════════════════════");
             y += 1;
 
-            let log_lines_data = get_last_lines(log_file, config.log_lines * 10);
+            let all_log_data: Vec<String> = get_all_log_lines(log_file);
 
           let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
 
-            for line in &log_lines_data {
+            for line in &all_log_data {
                 if let Some(slot_id) = get_slot_id(line) {
                     slot_map.entry(slot_id).or_insert_with(Vec::new).push(line.as_str());
                 }
@@ -1097,10 +1108,22 @@ fn main() {
             y += log_display.len() as u16;
         }
 
-        // Clear leftover lines from a taller previous frame.
-        for cy in y..prev_height {
-            execute!(io::stdout(), MoveTo(0, cy)).unwrap();
-            print!("{:120}\x1b[K", " ");
+        if let Ok((_term_w, term_h)) = size() {
+            let term_h = term_h as u16;
+            if y > term_h {
+                y = term_h;
+            }
+            for cy in y..term_h {
+                if let Ok(_) = execute!(io::stdout(), MoveTo(0, cy)) {
+                    let _ = write!(io::stdout(), "{:120}\x1b[K", " ");
+                    let _ = io::stdout().flush();
+                }
+            }
+        } else {
+            for cy in y..prev_height {
+                execute!(io::stdout(), MoveTo(0, cy)).unwrap();
+                print!("{:120}\x1b[K", " ");
+            }
         }
 
         prev_height = y;
