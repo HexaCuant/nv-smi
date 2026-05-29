@@ -176,16 +176,16 @@ impl Config {
                     .get(0)
                     .and_then(|d| d["log_file"].as_str())
                     .map(|s| s.to_string()),
-                log_lines: docs
-                    .get(0)
-                    .and_then(|d| d["log_lines"].as_i64())
-                    .map(|v| v as usize)
-                    .unwrap_or(10),
-                log_height: docs
-                    .get(0)
-                    .and_then(|d| d["log_height"].as_i64())
-                    .map(|v| v as usize)
-                    .unwrap_or(10),
+           log_lines: docs
+                .get(0)
+                .and_then(|d| d["log_lines"].as_i64())
+                .map(|v| v as usize)
+                .unwrap_or(10),
+            log_height: docs
+                .get(0)
+                .and_then(|d| d["log_height"].as_i64())
+                .map(|v| v as usize)
+                .unwrap_or(10),
             }
         } else {
             Config::default()
@@ -447,6 +447,61 @@ fn get_last_lines(path: &str, n: usize) -> Vec<String> {
         .collect();
     let start = if lines.len() > n { lines.len() - n } else { 0 };
     lines[start..].to_vec()
+}
+
+fn get_slot_id(line: &str) -> Option<usize> {
+    if !line.contains(" slot ") {
+        return None;
+    }
+    let slot_start = line.find(" slot ").unwrap();
+    let rest = &line[slot_start + 6..];
+    if !rest.starts_with("print_timing: id") {
+        return None;
+    }
+    let id_start = rest.find("id").unwrap() + 2;
+    let after_id = &rest[id_start..];
+    let trimmed = after_id.trim_start();
+    let num_str: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    num_str.parse::<usize>().ok()
+}
+
+#[derive(Debug)]
+struct SlotLog {
+    slot_id: usize,
+    lines: Vec<String>,
+}
+
+fn get_slot_logs(all_lines: &[String], max_per_slot: usize) -> Vec<SlotLog> {
+    let mut slot_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    let mut slot_order: Vec<usize> = Vec::new();
+
+    for line in all_lines {
+        if let Some(slot_id) = get_slot_id(line) {
+            if !slot_map.contains_key(&slot_id) {
+                slot_map.insert(slot_id, Vec::new());
+                slot_order.push(slot_id);
+            }
+            slot_map.get_mut(&slot_id).unwrap().push(line.clone());
+        }
+    }
+
+    slot_order.sort();
+
+    let mut result = Vec::new();
+    for slot_id in slot_order {
+        if let Some(lines) = slot_map.get(&slot_id) {
+            let start = if lines.len() > max_per_slot {
+                lines.len() - max_per_slot
+            } else {
+                0
+            };
+            result.push(SlotLog {
+                slot_id,
+                lines: lines[start..].to_vec(),
+            });
+        }
+    }
+    result
 }
 
 fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
@@ -869,7 +924,7 @@ fn main() {
             println_line("═══════════════════════════════════════════");
             y += 1;
 
-            let log_lines_data = get_last_lines(log_file, config.log_lines);
+            let log_lines_data = get_last_lines(log_file, config.log_lines * 10);
 
            // Try to parse inference stats from the most recent lines
             let mut last_stats: Option<InferenceStats> = None;
@@ -933,12 +988,39 @@ fn main() {
            println_line("");
             y += 1;
 
-            let log_display = render_log_window(&log_lines_data, config.log_height);
-            for (i, line) in log_display.iter().enumerate() {
-                execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
-                println!("{}\x1b[K", line);
+            let slot_logs = get_slot_logs(&log_lines_data, config.log_lines);
+            if !slot_logs.is_empty() {
+                let log_height = config.log_height.min(8);
+                for slot_log in &slot_logs {
+                    execute!(io::stdout(), MoveTo(0, y)).unwrap();
+                    print!("{}", format_colored(Color::Cyan, &format!("SLOT {} ({} lines)", slot_log.slot_id, slot_log.lines.len())));
+                    println_line("");
+                    y += 1;
+
+                    let max_w = 60usize;
+                    let border = "═".repeat(max_w);
+                    execute!(io::stdout(), MoveTo(0, y)).unwrap();
+                    println_line(&border);
+                    y += 1;
+
+                    let display = &slot_log.lines[slot_log.lines.len().saturating_sub(log_height)..];
+                    for line in display {
+                        execute!(io::stdout(), MoveTo(0, y)).unwrap();
+                        println!("{}\x1b[K", line);
+                        y += 1;
+                    }
+                    execute!(io::stdout(), MoveTo(0, y)).unwrap();
+                    println_line("");
+                    y += 1;
+                }
+            } else {
+                let log_display = render_log_window(&log_lines_data, config.log_height);
+                for (i, line) in log_display.iter().enumerate() {
+                    execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
+                    println!("{}\x1b[K", line);
+                }
+                y += log_display.len() as u16;
             }
-            y += log_display.len() as u16;
         }
 
         // Clear leftover lines from a taller previous frame.
