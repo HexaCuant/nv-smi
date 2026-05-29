@@ -33,6 +33,7 @@ struct InferenceStats {
     gen_speed_tps: f64,
     latency_ms_tok: f64,
     draft_acceptance: f64,
+    n_decoded_max: u32,
 }
 
 #[derive(Debug)]
@@ -200,6 +201,8 @@ fn get_nvidia_smi() -> String {
 struct LlamaServerInfo {
     model: String,
     params: Vec<(String, String)>,
+    context_len: u32,
+    n_parallel: u32,
 }
 
 fn get_llama_server_info() -> Option<LlamaServerInfo> {
@@ -225,6 +228,8 @@ fn get_llama_server_info() -> Option<LlamaServerInfo> {
         };
 
         let mut i = start;
+        let mut context_len: u32 = 0;
+        let mut n_parallel: u32 = 1;
         while i < args.len() {
             if !args[i].starts_with('-') {
                 i += 1;
@@ -240,7 +245,7 @@ fn get_llama_server_info() -> Option<LlamaServerInfo> {
                         i += 1;
                     }
                 }
-                "-ngl" | "-np" | "-t" | "-tb" | "-c" | "--top-k" | "--top-p"
+                "-ngl" | "-t" | "-tb" | "--top-k" | "--top-p"
                 | "--repeat-penalty" | "--temp" | "--port" | "--cache-reuse" => {
                     let key = args[i].trim_start_matches('-').to_string();
                     let val = if i + 1 < args.len() && !args[i + 1].starts_with('-') {
@@ -250,6 +255,22 @@ fn get_llama_server_info() -> Option<LlamaServerInfo> {
                     };
                     params.push((key, val));
                     i += 2;
+                }
+                "-c" => {
+                    if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                        context_len = parse_u32(args[i + 1]);
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                "-np" => {
+                    if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                        n_parallel = parse_u32(args[i + 1]);
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
                 }
                 "-fa" => {
                     let val = if i + 1 < args.len() && !args[i + 1].starts_with('-') {
@@ -292,7 +313,7 @@ fn get_llama_server_info() -> Option<LlamaServerInfo> {
         }
 
         if !model.is_empty() {
-            return Some(LlamaServerInfo { model, params });
+            return Some(LlamaServerInfo { model, params, context_len, n_parallel });
         }
     }
 
@@ -495,6 +516,7 @@ fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
         gen_speed_tps: if gen_speed > 0.0 { gen_speed } else { tps },
         latency_ms_tok: lat_tok,
         draft_acceptance,
+        n_decoded_max: 0,
     })
 }
 
@@ -602,6 +624,7 @@ fn extract_float_after(line: &str, marker: &str) -> f64 {
 
 fn render_inference_bars(stats: &InferenceStats) -> Vec<String> {
     let bar_empty = parse_color_str(&Config::default().bar_empty);
+    let max_decoded = if stats.n_decoded_max > 0 { stats.n_decoded_max as f64 } else { 1000.0 };
     vec![
         format!("{} {:.0}%",
             format_bar("Progress", stats.progress * 100.0, 100.0, Color::Green, bar_empty),
@@ -613,7 +636,7 @@ fn render_inference_bars(stats: &InferenceStats) -> Vec<String> {
             format_bar("Gen t/s", stats.gen_speed_tps, 100.0, Color::Green, bar_empty),
             stats.gen_speed_tps as u32),
         format!("{} {}",
-            format_bar("Decoded", stats.n_decoded as f64, 1000.0, Color::Magenta, bar_empty),
+            format_bar("Decoded", stats.n_decoded as f64, max_decoded, Color::Magenta, bar_empty),
             stats.n_decoded),
         format!("{} {:.1}%",
             format_bar("Draft", stats.draft_acceptance * 100.0, 100.0, Color::Magenta, bar_empty),
@@ -854,6 +877,7 @@ fn main() {
             let mut last_n_decoded: u32 = 0;
             let mut last_gen_speed: f64 = 0.0;
             let mut last_latency: f64 = 0.0;
+            let mut max_decoded_from_config: u32 = 0;
 
             for line in &log_lines_data {
                 if let Some(stats) = parse_inference_stats(line) {
@@ -870,6 +894,12 @@ fn main() {
             }
 
             // Always render inference bars (with zeros if no data yet)
+            if let Some(ref info) = llama_info {
+                if info.context_len > 0 && info.n_parallel > 0 {
+                    max_decoded_from_config = info.context_len / info.n_parallel;
+                }
+            }
+
             let mut stats_to_render = last_stats.unwrap_or(InferenceStats {
                 progress: 0.0,
                 time_seconds: 0.0,
@@ -878,6 +908,7 @@ fn main() {
                 gen_speed_tps: 0.0,
                 latency_ms_tok: 0.0,
                 draft_acceptance: 0.0,
+                n_decoded_max: 0,
             });
            // Persist values across renders so bars don't reset to 0.
             if found_print_timing { persist_progress = stats_to_render.progress; }
@@ -889,6 +920,7 @@ fn main() {
             stats_to_render.progress = persist_progress;
             stats_to_render.latency_ms_tok = last_latency;
             stats_to_render.draft_acceptance = persist_draft_acceptance;
+            stats_to_render.n_decoded_max = max_decoded_from_config;
 
             let bar_lines = render_inference_bars(&stats_to_render);
             for (i, line) in bar_lines.iter().enumerate() {
