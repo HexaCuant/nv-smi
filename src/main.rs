@@ -526,7 +526,9 @@ fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
         progress,
         time_seconds: if total_time > 0.0 { total_time } else { time_ms },
         tokens_per_second: tps,
-        n_decoded: if line.contains("stop processing") || line.contains("n_decoded") {
+        n_decoded: if line.contains("n_decoded") {
+            extract_number_after(line, "n_decoded =")
+        } else if line.contains("stop processing") {
             extract_number_after(line, "n_tokens")
         } else { 0 },
         gen_speed_tps: if gen_speed > 0.0 { gen_speed } else { tps },
@@ -538,7 +540,14 @@ fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
 
 fn parse_generation_stats(line: &str) -> Option<(u32, f64)> {
     // Also check for "stop processing" lines with final token count.
-    if line.contains("n_decoded") || (line.contains("stop processing") && line.contains("n_tokens")) {
+    if line.contains("n_decoded") {
+        let n_decoded = extract_number_after(line, "n_decoded =");
+        let gen_speed = extract_float_after(line, "tg =");
+        if n_decoded > 0 || gen_speed > 0.0 {
+            return Some((n_decoded, gen_speed));
+        }
+    }
+    if line.contains("stop processing") && line.contains("n_tokens") {
         let n_decoded = extract_number_after(line, "n_tokens");
         let gen_speed = extract_float_after(line, "tg =");
         if n_decoded > 0 || gen_speed > 0.0 {
@@ -711,10 +720,11 @@ fn main() {
     let mut prev_llama: Option<String> = None;
     let mut prev_log_lines: Vec<String> = Vec::new();
     let mut prev_height: u16 = 0;
-   let mut persist_progress: f64 = 0.0;
+    let mut persist_progress: f64 = 0.0;
     let mut persist_gen_speed: f64 = 0.0;
     let mut persist_n_decoded: u32 = 0;
     let mut persist_draft_acceptance: f64 = 0.0;
+    let mut prev_n_parallel: usize = 0;
 
     loop {
         let output = get_nvidia_smi();
@@ -809,8 +819,7 @@ fn main() {
         println_line("");
         y += 1;
 
-        let bar_empty = parse_color_str(&config.bar_empty);
-  
+       let bar_empty = parse_color_str(&config.bar_empty);
 
         for gpu in &gpus {
             execute!(io::stdout(), MoveTo(0, y)).unwrap();
@@ -888,40 +897,51 @@ fn main() {
 
             let log_lines_data = get_last_lines(log_file, config.log_lines * 10);
 
-            let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
-            let mut slot_order: Vec<usize> = Vec::new();
-            let mut all_non_slot_lines: Vec<String> = Vec::new();
+          let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
 
             for line in &log_lines_data {
                 if let Some(slot_id) = get_slot_id(line) {
-                    if !slot_map.contains_key(&slot_id) {
-                        slot_map.insert(slot_id, Vec::new());
-                        slot_order.push(slot_id);
-                    }
-                    slot_map.get_mut(&slot_id).unwrap().push(line.as_str());
-                } else {
-                    all_non_slot_lines.push(line.clone());
+                    slot_map.entry(slot_id).or_insert_with(Vec::new).push(line.as_str());
                 }
             }
 
-            let mut max_decoded_from_config: u32 = 0;
+                   let mut max_decoded_from_config: u32 = 0;
+            let mut n_parallel: u32 = 4;
             if let Some(ref info) = llama_info {
                 if info.context_len > 0 && info.n_parallel > 0 {
                     max_decoded_from_config = info.context_len / info.n_parallel;
+                    n_parallel = info.n_parallel;
                 }
+            }
+
+            let mut slot_n_decoded: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+            let mut slot_gen_speed: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+            let mut slot_draft: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+            let mut slot_progress: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+
+            if n_parallel as usize != prev_n_parallel {
+                slot_n_decoded.clear();
+                slot_gen_speed.clear();
+                slot_draft.clear();
+                slot_progress.clear();
+                prev_n_parallel = n_parallel as usize;
             }
 
             let mut all_slot_stats: Vec<InferenceStats> = Vec::new();
 
-            for slot_id in &slot_order {
-                let lines: Vec<&str> = slot_map.get(slot_id).unwrap().clone();
+            for slot_id in 0..n_parallel as usize {
+                let lines: Vec<&str> = slot_map.get(&slot_id).map(|v| v.as_slice()).unwrap_or(&[]).to_vec();
                 let mut s: Option<InferenceStats> = None;
                 let mut n_decoded: u32 = 0;
                 let mut gen_speed: f64 = 0.0;
+                let mut draft: f64 = 0.0;
+                let mut progress: f64 = 0.0;
                 let mut latency: f64 = 0.0;
 
                 for line in &lines {
                     if let Some(stats) = parse_inference_stats(line) {
+                        progress = stats.progress;
+                        draft = stats.draft_acceptance;
                         s = Some(stats);
                     }
                     if let Some((nd, gs)) = parse_generation_stats(line) {
@@ -933,6 +953,11 @@ fn main() {
                     }
                 }
 
+                if n_decoded > 0 { slot_n_decoded.insert(slot_id, n_decoded); }
+                if gen_speed > 0.0 { slot_gen_speed.insert(slot_id, gen_speed); }
+                if draft > 0.0 { slot_draft.insert(slot_id, draft); }
+                if progress > 0.0 { slot_progress.insert(slot_id, progress); }
+
                 let mut stats_to_render = s.unwrap_or(InferenceStats {
                     progress: 0.0,
                     time_seconds: 0.0,
@@ -943,18 +968,23 @@ fn main() {
                     draft_acceptance: 0.0,
                     n_decoded_max: 0,
                 });
-                stats_to_render.n_decoded = n_decoded;
-                stats_to_render.gen_speed_tps = gen_speed;
+                stats_to_render.n_decoded = *slot_n_decoded.get(&slot_id).unwrap_or(&0);
+                stats_to_render.gen_speed_tps = *slot_gen_speed.get(&slot_id).unwrap_or(&0.0);
                 stats_to_render.latency_ms_tok = latency;
+                stats_to_render.draft_acceptance = *slot_draft.get(&slot_id).unwrap_or(&0.0);
+                stats_to_render.progress = *slot_progress.get(&slot_id).unwrap_or(&0.0);
                 stats_to_render.n_decoded_max = max_decoded_from_config;
                 all_slot_stats.push(stats_to_render);
             }
 
-            let mut bar_y = y + 1;
-            let mut slot_idx = 0;
+            persist_progress = if !slot_progress.is_empty() { slot_progress.values().cloned().fold(0.0f64, f64::max) } else { persist_progress };
+            persist_gen_speed = if !slot_gen_speed.is_empty() { slot_gen_speed.values().cloned().fold(0.0f64, f64::max) } else { persist_gen_speed };
+            persist_n_decoded = if !slot_n_decoded.is_empty() { *slot_n_decoded.values().max_by(|a, b| a.cmp(b)).unwrap() } else { persist_n_decoded };
+            persist_draft_acceptance = if !slot_draft.is_empty() { slot_draft.values().cloned().fold(0.0f64, f64::max) } else { persist_draft_acceptance };
 
-            for slot_id in &slot_order {
-                let slot_stats = &all_slot_stats[slot_idx];
+            let mut bar_y = y + 1;
+
+            for (slot_id, slot_stats) in all_slot_stats.iter().enumerate() {
                 execute!(io::stdout(), MoveTo(0, bar_y)).unwrap();
                 print!("{}", format_colored(Color::Yellow, &format!("SLOT {} BARS", slot_id)));
                 println_line("");
@@ -970,11 +1000,10 @@ fn main() {
                 execute!(io::stdout(), MoveTo(0, bar_y)).unwrap();
                 println_line("");
                 bar_y += 1;
-                slot_idx += 1;
             }
 
             if all_slot_stats.is_empty() {
-                let mut stats_to_render = InferenceStats {
+                let stats_to_render = InferenceStats {
                     progress: persist_progress,
                     time_seconds: 0.0,
                     tokens_per_second: 0.0,
@@ -1010,13 +1039,12 @@ fn main() {
 
              let all_log_lines: Vec<String> = {
                 let mut result = Vec::new();
-                for slot_id in &slot_order {
-                    for line in slot_map.get(slot_id).unwrap() {
-                        result.push(line.to_string());
+                for slot_id in 0..n_parallel as usize {
+                    if let Some(lines) = slot_map.get(&slot_id) {
+                        for line in lines {
+                            result.push(line.to_string());
+                        }
                     }
-                }
-                for line in &all_non_slot_lines {
-                    result.push(line.clone());
                 }
                 result
             };
