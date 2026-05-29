@@ -32,6 +32,7 @@ struct InferenceStats {
     n_decoded: u32,
     gen_speed_tps: f64,
     latency_ms_tok: f64,
+    draft_acceptance: f64,
 }
 
 #[derive(Debug)]
@@ -479,6 +480,11 @@ fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
         total_time = extract_float_after(line, "= ") / 1000.0; // ms -> s
     }
 
+    let mut draft_acceptance: f64 = 0.0;
+    if line.contains("draft acceptance") {
+        draft_acceptance = extract_float_after(line, "draft acceptance = ");
+    }
+
     Some(InferenceStats {
         progress,
         time_seconds: if total_time > 0.0 { total_time } else { time_ms },
@@ -488,6 +494,7 @@ fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
         } else { 0 },
         gen_speed_tps: if gen_speed > 0.0 { gen_speed } else { tps },
         latency_ms_tok: lat_tok,
+        draft_acceptance,
     })
 }
 
@@ -608,6 +615,9 @@ fn render_inference_bars(stats: &InferenceStats) -> Vec<String> {
         format!("{} {}",
             format_bar("Decoded", stats.n_decoded as f64, 1000.0, Color::Magenta, bar_empty),
             stats.n_decoded),
+        format!("{} {:.1}%",
+            format_bar("Draft", stats.draft_acceptance * 100.0, 100.0, Color::Magenta, bar_empty),
+            stats.draft_acceptance * 100.0),
         format!("{} {:.2}ms",
             format_bar("Latency", stats.latency_ms_tok, 5.0, Color::Yellow, bar_empty),
             stats.latency_ms_tok),
@@ -665,6 +675,7 @@ fn main() {
    let mut persist_progress: f64 = 0.0;
     let mut persist_gen_speed: f64 = 0.0;
     let mut persist_n_decoded: u32 = 0;
+    let mut persist_draft_acceptance: f64 = 0.0;
 
     loop {
         let output = get_nvidia_smi();
@@ -866,15 +877,18 @@ fn main() {
                 n_decoded: 0,
                 gen_speed_tps: 0.0,
                 latency_ms_tok: 0.0,
+                draft_acceptance: 0.0,
             });
            // Persist values across renders so bars don't reset to 0.
             if found_print_timing { persist_progress = stats_to_render.progress; }
             if last_n_decoded > 0 { persist_n_decoded = last_n_decoded; }
             if last_gen_speed > 0.0 { persist_gen_speed = last_gen_speed; }
+            if stats_to_render.draft_acceptance > 0.0 { persist_draft_acceptance = stats_to_render.draft_acceptance; }
             stats_to_render.n_decoded = persist_n_decoded;
             stats_to_render.gen_speed_tps = persist_gen_speed;
             stats_to_render.progress = persist_progress;
             stats_to_render.latency_ms_tok = last_latency;
+            stats_to_render.draft_acceptance = persist_draft_acceptance;
 
             let bar_lines = render_inference_bars(&stats_to_render);
             for (i, line) in bar_lines.iter().enumerate() {
