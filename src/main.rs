@@ -798,6 +798,16 @@ fn main() {
     let mut prev_n_parallel: usize = 0;
     let mut log_byte_offset: u64 = 0;
     let mut log_line_count: usize = 0;
+
+    if let Some(ref log_file) = config.log_file {
+        if let Ok(metadata) = fs::metadata(log_file) {
+            log_byte_offset = metadata.len();
+            if let Ok(content) = fs::read_to_string(log_file) {
+                log_line_count = content.lines().count();
+            }
+        }
+    }
+
     let mut slot_n_decoded: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
     let mut slot_gen_speed: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
     let mut slot_draft: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
@@ -1069,8 +1079,13 @@ fn main() {
             let mut bar_y = y + 1;
 
             for (slot_id, slot_stats) in all_slot_stats.iter().enumerate() {
+                let is_idle = slot_stats.n_decoded == 0 && slot_stats.gen_speed_tps == 0.0;
                 execute!(io::stdout(), MoveTo(0, bar_y)).unwrap();
-                print!("{}", format_colored(Color::Yellow, &format!("SLOT {} BARS", slot_id)));
+                if is_idle {
+                    print!("{}", format_colored(Color::Grey, &format!("SLOT {} BARS  —  IDLE", slot_id)));
+                } else {
+                    print!("{}", format_colored(Color::Yellow, &format!("SLOT {} BARS", slot_id)));
+                }
                 println_line("");
                 bar_y += 1;
 
