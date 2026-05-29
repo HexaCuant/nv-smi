@@ -451,15 +451,48 @@ fn get_last_lines(path: &str, n: usize) -> Vec<String> {
     lines[start..].to_vec()
 }
 
-fn get_all_log_lines(path: &str) -> Vec<String> {
+fn read_new_log_lines(path: &str, offset: &mut u64, last_line_count: &mut usize) -> Vec<String> {
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    let file_size = metadata.len();
+    
+    if file_size < *offset {
+        *offset = 0;
+        *last_line_count = 0;
+        return Vec::new();
+    }
+    
+    if file_size == *offset {
+        return Vec::new();
+    }
+    
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    content
+    
+    let start_byte = if *offset > content.len() as u64 { 0 } else { *offset as usize };
+    if start_byte >= content.len() {
+        return Vec::new();
+    }
+    
+    let new_content = &content[start_byte..];
+    let lines: Vec<String> = new_content
         .lines()
         .map(|l| strip_ansi_codes(l))
-        .collect()
+        .collect();
+    
+    let new_line_count = lines.len();
+    *last_line_count = *last_line_count + new_line_count;
+    
+    let total_chars: usize = content.lines()
+        .map(|l| l.len() + 1)
+        .sum();
+    *offset = (total_chars as u64).min(content.len() as u64);
+    
+    lines
 }
 
 fn get_slot_id(line: &str) -> Option<usize> {
@@ -763,6 +796,8 @@ fn main() {
     let mut persist_n_decoded: u32 = 0;
     let mut persist_draft_acceptance: f64 = 0.0;
     let mut prev_n_parallel: usize = 0;
+    let mut log_byte_offset: u64 = 0;
+    let mut log_line_count: usize = 0;
 
     loop {
         let output = get_nvidia_smi();
@@ -933,11 +968,12 @@ fn main() {
             println_line("═══════════════════════════════════════════");
             y += 1;
 
-            let all_log_data: Vec<String> = get_all_log_lines(log_file);
+           let new_log_lines = read_new_log_lines(log_file, &mut log_byte_offset, &mut log_line_count);
+            let log_lines_data = get_last_lines(log_file, config.log_lines * 10);
 
           let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
 
-            for line in &all_log_data {
+            for line in &new_log_lines {
                 if let Some(slot_id) = get_slot_id(line) {
                     slot_map.entry(slot_id).or_insert_with(Vec::new).push(line.as_str());
                 }
@@ -1088,19 +1124,7 @@ fn main() {
             println_line("──────────────────────────────────────────");
             y += 1;
 
-             let all_log_lines: Vec<String> = {
-                let mut result = Vec::new();
-                for slot_id in 0..n_parallel as usize {
-                    if let Some(lines) = slot_map.get(&slot_id) {
-                        for line in lines {
-                            result.push(line.to_string());
-                        }
-                    }
-                }
-                result
-            };
-
-            let log_display = render_log_window(&all_log_lines, config.log_height);
+             let log_display = render_log_window(&log_lines_data, config.log_height);
             for (i, line) in log_display.iter().enumerate() {
                 execute!(io::stdout(), MoveTo(0, y + i as u16)).unwrap();
                 println!("{}\x1b[K", line);
