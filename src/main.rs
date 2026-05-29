@@ -981,7 +981,9 @@ fn main() {
                         latency = lat;
                     }
                     if let Some((ctx, _)) = parse_ctx_usage(line) {
-                        slot_ctx_used.insert(slot_id, ctx);
+                        if ctx > 0 {
+                            slot_ctx_used.insert(slot_id, ctx);
+                        }
                     }
                 }
 
