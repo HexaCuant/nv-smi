@@ -798,6 +798,11 @@ fn main() {
     let mut prev_n_parallel: usize = 0;
     let mut log_byte_offset: u64 = 0;
     let mut log_line_count: usize = 0;
+    let mut slot_n_decoded: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+    let mut slot_gen_speed: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+    let mut slot_draft: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+    let mut slot_progress: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+    let mut slot_ctx_used: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
 
     loop {
         let output = get_nvidia_smi();
@@ -971,7 +976,7 @@ fn main() {
            let new_log_lines = read_new_log_lines(log_file, &mut log_byte_offset, &mut log_line_count);
             let log_lines_data = get_last_lines(log_file, config.log_lines * 10);
 
-          let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
+           let mut slot_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
 
             for line in &new_log_lines {
                 if let Some(slot_id) = get_slot_id(line) {
@@ -987,12 +992,6 @@ fn main() {
                     n_parallel = info.n_parallel;
                 }
             }
-
-            let mut slot_n_decoded: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
-            let mut slot_gen_speed: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
-            let mut slot_draft: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
-            let mut slot_progress: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
-            let mut slot_ctx_used: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
 
             if n_parallel as usize != prev_n_parallel {
                 slot_n_decoded.clear();
