@@ -34,6 +34,8 @@ struct InferenceStats {
     latency_ms_tok: f64,
     draft_acceptance: f64,
     n_decoded_max: u32,
+    ctx_n_tokens: u32,
+    ctx_used: u32,
 }
 
 #[derive(Debug)]
@@ -455,14 +457,14 @@ fn get_slot_id(line: &str) -> Option<usize> {
     }
     let slot_start = line.find(" slot ").unwrap();
     let rest = &line[slot_start + 6..];
-    if !rest.starts_with("print_timing: id") {
-        return None;
+    if let Some(id_pos) = rest.find(": id") {
+        let after_colon = &rest[id_pos + 6..];
+        let trimmed = after_colon.trim_start();
+        let num_str: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+        num_str.parse::<usize>().ok()
+    } else {
+        None
     }
-    let id_start = rest.find("id").unwrap() + 2;
-    let after_id = &rest[id_start..];
-    let trimmed = after_id.trim_start();
-    let num_str: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
-    num_str.parse::<usize>().ok()
 }
 
 fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
@@ -535,6 +537,8 @@ fn parse_inference_stats(line: &str) -> Option<InferenceStats> {
         latency_ms_tok: lat_tok,
         draft_acceptance,
         n_decoded_max: 0,
+        ctx_n_tokens: 0,
+        ctx_used: 0,
     })
 }
 
@@ -647,9 +651,29 @@ fn extract_float_after(line: &str, marker: &str) -> f64 {
     }
 }
 
+fn parse_ctx_usage(line: &str) -> Option<(u32, u32)> {
+    if !line.contains("slot update_slots") {
+        return None;
+    }
+    let n_past = extract_number_after(line, "n_past =");
+    let pos_max = extract_number_after(line, "pos_max =");
+    if n_past > 0 {
+        Some((n_past, 0))
+    } else if pos_max > 0 {
+        Some((pos_max + 1, 0))
+    } else {
+        None
+    }
+}
+
 fn render_inference_bars(stats: &InferenceStats) -> Vec<String> {
     let bar_empty = parse_color_str(&Config::default().bar_empty);
     let max_decoded = if stats.n_decoded_max > 0 { stats.n_decoded_max as f64 } else { 1000.0 };
+    let ctx_percent = if stats.ctx_n_tokens > 0 {
+        (stats.ctx_used as f64 / stats.ctx_n_tokens as f64) * 100.0
+    } else {
+        0.0
+    };
     vec![
         format!("{} {:.0}%",
             format_bar("Progress", stats.progress * 100.0, 100.0, Color::Green, bar_empty),
@@ -666,6 +690,9 @@ fn render_inference_bars(stats: &InferenceStats) -> Vec<String> {
         format!("{} {:.1}%",
             format_bar("Draft", stats.draft_acceptance * 100.0, 100.0, Color::Magenta, bar_empty),
             stats.draft_acceptance * 100.0),
+        format!("{} {} / {} tokens",
+            format_bar("Context", ctx_percent, 100.0, Color::Yellow, bar_empty),
+            stats.ctx_used, stats.ctx_n_tokens),
         format!("{} {:.2}ms",
             format_bar("Latency", stats.latency_ms_tok, 5.0, Color::Yellow, bar_empty),
             stats.latency_ms_tok),
@@ -918,12 +945,14 @@ fn main() {
             let mut slot_gen_speed: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
             let mut slot_draft: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
             let mut slot_progress: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+            let mut slot_ctx_used: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
 
             if n_parallel as usize != prev_n_parallel {
                 slot_n_decoded.clear();
                 slot_gen_speed.clear();
                 slot_draft.clear();
                 slot_progress.clear();
+                slot_ctx_used.clear();
                 prev_n_parallel = n_parallel as usize;
             }
 
@@ -951,6 +980,9 @@ fn main() {
                     if let Some(lat) = parse_latency(line) {
                         latency = lat;
                     }
+                    if let Some((ctx, _)) = parse_ctx_usage(line) {
+                        slot_ctx_used.insert(slot_id, ctx);
+                    }
                 }
 
                 if n_decoded > 0 { slot_n_decoded.insert(slot_id, n_decoded); }
@@ -967,6 +999,8 @@ fn main() {
                     latency_ms_tok: 0.0,
                     draft_acceptance: 0.0,
                     n_decoded_max: 0,
+                    ctx_n_tokens: 0,
+                    ctx_used: 0,
                 });
                 stats_to_render.n_decoded = *slot_n_decoded.get(&slot_id).unwrap_or(&0);
                 stats_to_render.gen_speed_tps = *slot_gen_speed.get(&slot_id).unwrap_or(&0.0);
@@ -974,6 +1008,8 @@ fn main() {
                 stats_to_render.draft_acceptance = *slot_draft.get(&slot_id).unwrap_or(&0.0);
                 stats_to_render.progress = *slot_progress.get(&slot_id).unwrap_or(&0.0);
                 stats_to_render.n_decoded_max = max_decoded_from_config;
+                stats_to_render.ctx_n_tokens = max_decoded_from_config;
+                stats_to_render.ctx_used = *slot_ctx_used.get(&slot_id).unwrap_or(&0);
                 all_slot_stats.push(stats_to_render);
             }
 
@@ -1012,6 +1048,8 @@ fn main() {
                     latency_ms_tok: 0.0,
                     draft_acceptance: persist_draft_acceptance,
                     n_decoded_max: max_decoded_from_config,
+                    ctx_n_tokens: max_decoded_from_config,
+                    ctx_used: 0,
                 };
 
                 let bar_lines = render_inference_bars(&stats_to_render);
