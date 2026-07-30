@@ -1419,7 +1419,7 @@ fn main() {
                 stats_to_render.latency_ms_tok = *slot_latency.get(&slot_id).unwrap_or(&0.0);
                 stats_to_render.time_seconds = *slot_time_seconds.get(&slot_id).unwrap_or(&persist_time_seconds);
                 stats_to_render.draft_acceptance = *slot_draft.get(&slot_id).unwrap_or(&0.0);
-                stats_to_render.progress = *slot_progress.get(&slot_id).unwrap_or(&persist_progress);
+                stats_to_render.progress = *slot_progress.get(&slot_id).unwrap_or(&0.0);
                 stats_to_render.n_decoded_max = max_decoded_from_config;
                 stats_to_render.ctx_n_tokens = max_decoded_from_config;
                 stats_to_render.ctx_used = *slot_ctx_used.get(&slot_id).unwrap_or(&0);
