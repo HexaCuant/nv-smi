@@ -979,34 +979,35 @@ fn render_inference_bars(stats: &InferenceStats, skip_progress: bool, config: &C
     } else {
         0.0
     };
+    let bar_color = Color::DarkCyan;
     let mut bars: Vec<String> = Vec::new();
     if !skip_progress {
         bars.push(format!("{} {:.0}%",
-            format_bar("Progress", stats.progress * 100.0, 100.0, Color::DarkGreen, bar_empty),
+            format_bar("Progress", stats.progress * 100.0, 100.0, bar_color, bar_empty),
             stats.progress * 100.0));
     }
     bars.push(format!("{} {}/s",
-        format_bar("Prompt t/s", stats.tokens_per_second, 3000.0, Color::DarkCyan, bar_empty),
+        format_bar("Prompt t/s", stats.tokens_per_second, 3000.0, bar_color, bar_empty),
         stats.tokens_per_second as u32));
     bars.push(format!("{} {}/s",
-        format_bar("Gen t/s", stats.gen_speed_tps, 100.0, Color::DarkGreen, bar_empty),
+        format_bar("Gen t/s", stats.gen_speed_tps, 100.0, bar_color, bar_empty),
         stats.gen_speed_tps as u32));
     bars.push(format!("{} {}",
-        format_bar("Decoded", stats.n_decoded as f64, max_decoded, Color::DarkMagenta, bar_empty),
+        format_bar("Decoded", stats.n_decoded as f64, max_decoded, bar_color, bar_empty),
         stats.n_decoded));
     bars.push(format!("{} {:.1}%",
-        format_bar("Draft", stats.draft_acceptance * 100.0, 100.0, Color::DarkMagenta, bar_empty),
+        format_bar("Draft", stats.draft_acceptance * 100.0, 100.0, bar_color, bar_empty),
         stats.draft_acceptance * 100.0));
     bars.push(format!("{} {} / {} tokens",
-        format_bar("Context", ctx_percent, 100.0, Color::DarkYellow, bar_empty),
+        format_bar("Context", ctx_percent, 100.0, bar_color, bar_empty),
         stats.ctx_used, stats.ctx_n_tokens));
     bars.push(format!("{} {:.2}ms",
-        format_bar("Latency", stats.latency_ms_tok, 5.0, Color::DarkYellow, bar_empty),
+        format_bar("Latency", stats.latency_ms_tok, 5.0, bar_color, bar_empty),
         stats.latency_ms_tok));
     let mins = stats.time_seconds as u64 / 60;
     let secs = (stats.time_seconds as u64 % 60);
     bars.push(format!("{} {:02}:{:02}",
-        format_colored(Color::DarkYellow, "Time"), mins, secs));
+        format_colored(bar_color, "Time"), mins, secs));
     bars
 }
 
@@ -1045,7 +1046,7 @@ fn render_gpu_section(gpus: &[GpuInfo], config: &Config, bar_empty: Color, y: &m
         *y += 1;
 
         let _ = execute!(io::stdout(), MoveTo(0, *y));
-        print!("{}", format_bar("Fan", gpu.fan_speed, 100.0, Color::White, bar_empty));
+        print!("{}", format_bar("Fan", gpu.fan_speed, 100.0, Color::DarkCyan, bar_empty));
         print!(" {:.0}%\x1b[K", gpu.fan_speed);
         *y += 1;
 
@@ -1189,10 +1190,11 @@ fn render_slot_bars(
 
         let bar_lines = render_inference_bars(slot_stats, all_idle, config);
         for (i, line) in bar_lines.iter().enumerate() {
-            let _ = execute!(io::stdout(), MoveTo(0, bar_y + i as u16));
+            let row = bar_y + (i * 2) as u16;
+            let _ = execute!(io::stdout(), MoveTo(0, row));
             print!("{}\x1b[K", line);
         }
-        bar_y += bar_lines.len() as u16;
+        bar_y += (bar_lines.len() * 2) as u16;
 
         let _ = execute!(io::stdout(), MoveTo(0, bar_y));
         println_line("");
@@ -1448,10 +1450,11 @@ fn main() {
 
                 let bar_lines = render_inference_bars(&stats_to_render, true, &config);
                 for (i, line) in bar_lines.iter().enumerate() {
-                    let _ = execute!(io::stdout(), MoveTo(0, y + 1 + i as u16));
+                    let row = y + 1 + (i * 2) as u16;
+                    let _ = execute!(io::stdout(), MoveTo(0, row));
                     print!("{}\x1b[K", line);
                 }
-                y += 1 + bar_lines.len() as u16;
+                y += 1 + (bar_lines.len() * 2) as u16;
             } else {
                 render_slot_bars(&all_slot_stats, all_idle, &config, &mut y);
             }
